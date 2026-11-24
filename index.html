@@ -198,15 +198,92 @@ function searchBox(){
     if (q.length < 2) return;
     out.innerHTML = '<div class="edge">מחפש לפי משמעות ולפי מילים…</div>';
     let r;
-    try { r = await (await fetch(API + 'search', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({q, cat: $('sc').value, tok: TOK})})).json(); }
-    catch (_) { r = {error: 'offline'}; }
-    if (r.error) { out.innerHTML = '<div class="edge">' + ({offline: 'החיפוש לא זמין כרגע (המחשב שבו נמצאת הספרייה כבוי). אפשר עדיין לחפש ספר לפי שם, למטה.', busy: 'יותר מדי חיפושים בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה לחיפוש. רעננו את הדף והקישו שוב את הקוד.'}[r.error] || 'החיפוש נכשל. נסו שוב.') + '</div>'; return; }
+    try { r = await xsearch(q, $('sc').value); } catch (err) { console.error(err); r = {error: 'failed'}; }
+    if (r.error) { out.innerHTML = '<div class="edge">' + ({offline: 'החיפוש לא זמין כרגע. אפשר עדיין לחפש ספר לפי שם, למטה.', busy: 'יותר מדי חיפושים בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה לחיפוש. רעננו את הדף והקישו שוב את הקוד.'}[r.error] || 'החיפוש נכשל. נסו שוב.') + '</div>'; return; }
     if (!r.results.length) { out.innerHTML = '<div class="edge">לא נמצא דבר. נסו ניסוח אחר.</div>'; return; }
     out.innerHTML = r.results.map(x => '<div style="border-top:1px solid var(--line);padding:10px 0">'
       + (x.url ? '<a style="font-weight:700;color:var(--accent)" href="' + esc(x.url) + '"' + (x.url.includes('/mekorot/') ? ' target="_blank" rel="noopener"' : '') + '>' + esc(x.source) + '</a>' : '<b>' + esc(x.source) + '</b>')
       + '<div style="color:var(--soft);font-size:13.5px">' + esc(x.cat) + (x.head ? ' · ' + esc(x.head) : '') + ' · ' + esc(x.by) + '</div>'
       + '<div>' + esc(x.excerpt) + '</div></div>').join('');
   };
+}
+
+// ----- החיפוש עצמו, בדפדפן (mekorot\sindex.py): IVF-PQ על אינדקס מוצפן שיושב ב-GitHub. רק השאלה עוברת ל-Worker, כדי להפוך לווקטור
+let XM = null;
+const f16 = (() => { const t = new Float32Array(65536); for (let h = 0; h < 65536; h++) { const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;
+  t[h] = e === 0 ? s * m * 2 ** -24 : e === 31 ? (m ? NaN : s * Infinity) : s * (1 + m / 1024) * 2 ** (e - 15); } return t; })();
+function hexTo(hex, type){ const b = new Uint8Array(hex.length / 2); for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.substr(i * 2, 2), 16);
+  if (type === 'f16') { const u = new Uint16Array(b.buffer), o = new Float32Array(u.length); for (let i = 0; i < u.length; i++) o[i] = f16[u[i]]; return o; }
+  return new Float32Array(b.buffer); }
+async function raw(url, enc){       // קובץ בינארי: מפוענח (בספרייה הנעולה) ופתוח מדחיסה
+  const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status);
+  let buf = new Uint8Array(await r.arrayBuffer());
+  if (enc) buf = new Uint8Array(await crypto.subtle.decrypt({name: 'AES-GCM', iv: buf.slice(0, 12)}, KEY, buf.slice(12)));
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = new Uint8Array(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  return buf;
+}
+async function xmeta(){
+  if (XM) return XM;
+  const m = JSON.parse(new TextDecoder().decode(await raw('x/meta.bin', true)));
+  m.P = hexTo(m.P, 'f16'); m.C = hexTo(m.C, 'f16'); m.CB = hexTo(m.CB, 'f32');
+  return XM = m;
+}
+let XP = null;
+async function xprim(){     // מקורות היסוד (sindex.py build_prim): חיפוש מדויק, כדי שהמפרשים לא ידחקו את המקור עצמו
+  if (XP) return XP;
+  const buf = await raw('x/prim.bin', true), dv = new DataView(buf.buffer, buf.byteOffset), n = dv.getUint32(0, true), scale = dv.getFloat32(4, true);
+  const v = new Int8Array(buf.buffer, buf.byteOffset + 8, n * 256), bOff = 8 + n * 256;
+  return XP = {n, scale, v, book: i => dv.getUint16(bOff + i * 2, true), pos: i => dv.getUint32(bOff + n * 2 + i * 4, true)};
+}
+const PARTS = new Map();
+function part(ref, n){      // קובץ קטעים של ספר: m = אתר המקורות (פתוח), s = הספרייה הנעולה (מוצפן)
+  const [rn, key] = ref.slice(1).split('.'), u = ref[0] === 'm' ? 'https://yudataub.github.io/mekorot-' + rn + '/b/' + key + '/' + n + '.json.gz' : '../sifriya-' + rn + '/b/' + key + '/' + n + '.json.gz';
+  if (!PARTS.has(u)) PARTS.set(u, raw(u, ref[0] === 's').then(b => JSON.parse(new TextDecoder().decode(b))));
+  return PARTS.get(u);
+}
+function snippet(text, words){
+  let at = -1; for (const w of words) { const i = text.indexOf(w); if (i >= 0) { at = i; break; } }
+  const s = Math.max(0, at - 140); return (s ? '…' : '') + text.slice(s, s + 420) + (s + 420 < text.length ? '…' : '');
+}
+async function xsearch(q, cat){
+  const [m, ev] = await Promise.all([xmeta(), fetch(API + 'embed', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({q})}).then(r => r.json())]);
+  if (!ev.v) return {error: 'offline'};
+  const D = m.d, Mq = m.m, KS = m.ks, v = ev.v, qp = new Float32Array(D);
+  for (let i = 0; i < 1024; i++) { const vi = v[i]; if (!vi) continue; for (let j = 0; j < D; j++) qp[j] += vi * m.P[i * D + j]; }
+  const cs = new Float32Array(m.nlist);
+  for (let l = 0; l < m.nlist; l++) { let s = 0; for (let j = 0; j < D; j++) s += m.C[l * D + j] * qp[j]; cs[l] = s; }
+  const nprobe = cat ? m.nprobe * 3 : m.nprobe, probe = [...cs.keys()].sort((a, b) => cs[b] - cs[a]).slice(0, nprobe);
+  const T = new Float32Array(Mq * KS), sub = D / Mq;
+  for (let k = 0; k < Mq; k++) for (let c = 0; c < KS; c++) { let s = 0; for (let d = 0; d < sub; d++) s += m.CB[(k * KS + c) * sub + d] * qp[k * sub + d]; T[k * KS + c] = s; }
+  const want = cat === 'ספריא' ? (b => m.books[b][0][0] === 'm') : cat ? (b => m.books[b][2] === cat.replace(/_/g, ' ')) : null;
+  const best = [];
+  await Promise.all(probe.map(async l => {
+    const buf = await raw('../sifriya-x' + m.where[l] + '/l/' + l + '.bin', true), dv = new DataView(buf.buffer, buf.byteOffset), n = dv.getUint32(0, true);
+    const cOff = 4, bOff = 4 + n * Mq, pOff = bOff + n * 2;
+    for (let i = 0; i < n; i++) {
+      const b = dv.getUint16(bOff + i * 2, true);
+      if (want && !want(b)) continue;
+      let s = 0; for (let k = 0; k < Mq; k++) s += T[k * KS + buf[cOff + i * Mq + k]];
+      best.push([s, b, dv.getUint32(pOff + i * 4, true)]);
+    }
+  }));
+  best.sort((a, b) => b[0] - a[0]);
+  const words = q.split(/\s+/).filter(w => w.length > 2), per = {}, pick = [], seen = new Set();
+  if (!cat || cat === 'ספריא') {          // עד 4 מקורות יסוד בראש, ואחריהם השאר
+    const p = await xprim(), ps = new Float32Array(p.n);
+    for (let i = 0; i < p.n; i++) { let s = 0; const o = i * 256; for (let j = 0; j < 256; j++) s += p.v[o + j] * qp[j]; ps[i] = s; }
+    const top = [...ps.keys()].sort((a, b) => ps[b] - ps[a]).slice(0, 40);
+    for (const i of top) { const b = p.book(i); per[b] = (per[b] || 0) + 1; if (per[b] > 2) continue; pick.push([ps[i], b, p.pos(i)]); seen.add(b + ':' + p.pos(i)); if (pick.length >= 4) break; }
+  }
+  for (const h of best) { if (seen.has(h[1] + ':' + h[2])) continue; per[h[1]] = (per[h[1]] || 0) + 1; if (per[h[1]] > 2) continue; pick.push(h); if (pick.length >= 10) break; }
+  const qs = encodeURIComponent(words.join(' '));
+  const results = await Promise.all(pick.map(async ([s, b, pos]) => {
+    const [ref, title, c] = m.books[b], rows = await part(ref, Math.floor(pos / 150)).catch(() => null), row = rows && rows[pos % 150];
+    const text = row ? row[2].map(p => p[0]).join(' ') : '';
+    const url = ref[0] === 'm' ? 'https://yudataub.github.io/mekorot/?b=' + ref.slice(1) + '&p=' + pos + '&q=' + qs : '?b=' + ref.slice(1) + '&p=' + pos + '&q=' + qs;
+    return {source: title, head: row ? row[0] : '', cat: c, by: 'משמעות', excerpt: snippet(text, words), url};
+  }));
+  return {query: q, results};
 }
 
 // ----- ספר
