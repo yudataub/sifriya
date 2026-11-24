@@ -27,13 +27,13 @@ if not defined PY (
 echo       %PY%
 
 echo [2/4] Downloading the app...
-curl -L -f -s -o "%D%\app.zip" "%SITE%/app.zip"
+"%SystemRoot%\System32\curl.exe" -L -f -s -o "%D%\app.zip" "%SITE%/app.zip"
 if errorlevel 1 ( echo Download failed. Check the internet connection and run this file again. & pause & exit /b 1 )
-tar -xf "%D%\app.zip" -C "%D%"
+"%SystemRoot%\System32\tar.exe" -xf "%D%\app.zip" -C "%D%"
 del "%D%\app.zip"
 
 echo [3/4] Installing Python packages ^(numpy, onnxruntime, tokenizers, cryptography^)...
-"%PY%" -m pip install --quiet --disable-pip-version-check --upgrade numpy onnxruntime tokenizers cryptography
+"%PY%" -m pip install --quiet --disable-pip-version-check numpy onnxruntime tokenizers cryptography
 if errorlevel 1 ( echo Package install failed. Run this file again. & pause & exit /b 1 )
 
 echo [4/4] Creating a desktop shortcut and starting...
@@ -43,4 +43,4 @@ start "" "%PYW%" "%D%\app.py"
 echo.
 echo Done. The app opens in the browser: http://127.0.0.1:8418/
 echo Next time: the "Sifriya" shortcut on the desktop.
-timeout /t 8 >nul
+"%SystemRoot%\System32\timeout.exe" /t 8 >nul 2>nul
