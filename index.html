@@ -156,6 +156,8 @@ async function home(){
     $('bf').insertAdjacentHTML('beforebegin', '<div class="sig" style="margin:14px 0 6px">💻 <b>התקנה במחשב</b>: חיפוש לפי משמעות בכל המאגרים, דף מקורות, ושאלות ל-Claude שלך.<br>'
       + '1. מורידים את <a href="sifriya-install.cmd" download>קובץ ההתקנה</a> ומפעילים אותו בלחיצה כפולה (אם Windows מזהיר: "מידע נוסף" ← "הפעל בכל זאת").<br>'
       + '2. בדף שנפתח מקישים את קוד הגישה ובוחרים אילו מאגרים להוריד.<br>3. מתחברים ל-Claude (פעם אחת) ומתחילים לשאול.<br>'
+      + 'קובץ התקנה למאגר אחד, שמתקין אותו מיד אחרי הקשת הקוד: <a href="install-kodesh.cmd" download>ספרי הקודש + אוצריא</a> · <a href="install-torani.cmd" download>הספריה התורנית</a> · '
+      + '<a href="install-asif.cmd" download>אסיף</a> · <a href="install-otzar.cmd" download>אוצר התורה</a> · <a href="install-hebrewbooks.cmd" download>היברובוקס</a><br>'
       + '<span style="color:var(--soft)">דרוש Windows 10 ומעלה. כל מאגר מותקן בנפרד, והמקום בדיסק לפי מה שבוחרים.</span></div>'); }
   for (const id of ['bToc', 'bGo', 'bCite', 'bHome']) $(id).style.display = 'none';
   const list = CFG.books.endsWith('.gz') ? await gz(CFG.books) : await (await fetch(CFG.books)).json();      // [מזהה, שם, תחום, קטעים]
