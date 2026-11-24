@@ -116,12 +116,18 @@ $('bTheme').onclick = () => { theme = themes[(themes.indexOf(theme) + 1) % theme
 let KEY = null;               // מפתח הפענוח (רק בספרייה הנעולה): PBKDF2-SHA256 + AES-GCM, כמו בספרייה הנעולה gan-naul
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 async function unlock(code){
-  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveKey']);
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveKey', 'deriveBits']);
   const key = await crypto.subtle.deriveKey({name: 'PBKDF2', salt: b64(CFG.s), iterations: CFG.r, hash: 'SHA-256'}, base, {name: 'AES-GCM', length: 256}, false, ['decrypt']);
   const c = b64(CFG.chk);
   await crypto.subtle.decrypt({name: 'AES-GCM', iv: c.slice(0, 12)}, key, c.slice(12));      // קוד שגוי: נזרקת שגיאה
   KEY = key;
+  try {                                    // אסימון לחיפוש (lsearch.py): לא הקוד עצמו, ולא מפתח הפענוח
+    const salt = new Uint8Array([...new TextEncoder().encode('search:'), ...b64(CFG.s)]);
+    const bits = await crypto.subtle.deriveBits({name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256'}, base, 256);
+    TOK = [...new Uint8Array(bits)].map(x => x.toString(16).padStart(2, '0')).join('');
+  } catch (_) {}
 }
+let TOK = '';
 async function gz(url){
   const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status);
   let buf = new Uint8Array(await r.arrayBuffer());
@@ -152,6 +158,7 @@ async function gate(){
 // ----- דף הבית: רשימת הספרים לפי תחום
 async function home(){
   document.body.classList.add('home'); $('home').hidden = false;
+  if (CFG.lock) searchBox();
   if (CFG.lock) { document.title = CFG.name; $('title').textContent = CFG.name; $('home').querySelector('h1').textContent = CFG.name; $('home').querySelector('.lead').textContent = 'הטקסט המלא של הספרים שבמאגרים. לשימוש אישי בלבד.';
     $('bf').insertAdjacentHTML('beforebegin', '<div class="sig" style="margin:14px 0 6px">💻 <b>התקנה במחשב</b>: חיפוש לפי משמעות בכל המאגרים, דף מקורות, ושאלות ל-Claude שלך.<br>'
       + '1. מורידים את <a href="sifriya-install.cmd" download>קובץ ההתקנה</a> ומפעילים אותו בלחיצה כפולה (אם Windows מזהיר: "מידע נוסף" ← "הפעל בכל זאת").<br>'
@@ -173,6 +180,33 @@ async function home(){
       d.ontoggle = () => { if (d.open && !d.dataset.full) { d.dataset.full = 1; fill(d.querySelector('ul'), bs); } }; if (f) d.open = true; });
   }
   $('bf').oninput = draw; draw();
+}
+
+// ----- חיפוש בתוך כל המאגרים (רק בספרייה הנעולה): השאלה עוברת ל-Worker ומשם למחשב שבו הספרייה (mekorot\lsearch.py)
+const API = 'https://kvatzim.kvatzim.workers.dev/l/';
+const LCATS = [['', 'כל המאגרים'], ['ספריא', 'ספרי הקודש (ספריא)'], ['אוצריא', 'אוצריא'], ['הספריה_התורנית', 'הספריה התורנית'], ['היברובוקס', 'היברובוקס'],
+  ['אסיף', 'אסיף'], ['אוצר_התורה', 'אוצר התורה'], ['שיעורי_הרב', 'שיעורי הרב'], ['הרב_רימון', 'ספרי הרב רימון']];
+function searchBox(){
+  $('home').querySelector('.lead').insertAdjacentHTML('afterend', '<form id="sf" style="margin:16px 0 6px;display:flex;gap:8px;flex-wrap:wrap">'
+    + '<input id="sq" placeholder="חיפוש בתוך הספרים: שאלה, נושא או ציטוט" style="flex:1;min-width:220px;font:17px \'Segoe UI\',Arial,sans-serif;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)">'
+    + '<select id="sc" style="font:15px \'Segoe UI\',Arial,sans-serif;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)">'
+    + LCATS.map(c => '<option value="' + c[0] + '">' + c[1] + '</option>').join('') + '</select><button class="btn" style="font-size:16px">חיפוש</button></form>'
+    + '<div id="sr" style="font:15.5px/1.65 \'Segoe UI\',Arial,sans-serif"></div>');
+  $('sf').onsubmit = async e => {
+    e.preventDefault();
+    const q = $('sq').value.trim(), out = $('sr');
+    if (q.length < 2) return;
+    out.innerHTML = '<div class="edge">מחפש לפי משמעות ולפי מילים…</div>';
+    let r;
+    try { r = await (await fetch(API + 'search', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({q, cat: $('sc').value, tok: TOK})})).json(); }
+    catch (_) { r = {error: 'offline'}; }
+    if (r.error) { out.innerHTML = '<div class="edge">' + ({offline: 'החיפוש לא זמין כרגע (המחשב שבו נמצאת הספרייה כבוי). אפשר עדיין לחפש ספר לפי שם, למטה.', busy: 'יותר מדי חיפושים בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה לחיפוש. רעננו את הדף והקישו שוב את הקוד.'}[r.error] || 'החיפוש נכשל. נסו שוב.') + '</div>'; return; }
+    if (!r.results.length) { out.innerHTML = '<div class="edge">לא נמצא דבר. נסו ניסוח אחר.</div>'; return; }
+    out.innerHTML = r.results.map(x => '<div style="border-top:1px solid var(--line);padding:10px 0">'
+      + (x.url ? '<a style="font-weight:700;color:var(--accent)" href="' + esc(x.url) + '"' + (x.url.includes('/mekorot/') ? ' target="_blank" rel="noopener"' : '') + '>' + esc(x.source) + '</a>' : '<b>' + esc(x.source) + '</b>')
+      + '<div style="color:var(--soft);font-size:13.5px">' + esc(x.cat) + (x.head ? ' · ' + esc(x.head) : '') + ' · ' + esc(x.by) + '</div>'
+      + '<div>' + esc(x.excerpt) + '</div></div>').join('');
+  };
 }
 
 // ----- ספר
