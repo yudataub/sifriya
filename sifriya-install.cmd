@@ -5,6 +5,7 @@ setlocal
 title Sifriya - install
 set "D=%LOCALAPPDATA%\Sifriya"
 set "SITE=https://yudataub.github.io/sifriya"
+set "PRESET="
 if not exist "%D%" mkdir "%D%"
 
 echo [1/4] Looking for Python...
@@ -35,6 +36,9 @@ del "%D%\app.zip"
 echo [3/4] Installing Python packages ^(numpy, onnxruntime, tokenizers, cryptography^)...
 "%PY%" -m pip install --quiet --disable-pip-version-check numpy onnxruntime tokenizers cryptography
 if errorlevel 1 ( echo Package install failed. Run this file again. & pause & exit /b 1 )
+
+if defined PRESET (echo %PRESET%)> "%D%\preset.txt"
+"%PY%" "%D%\app.py" --skill
 
 echo [4/4] Creating a desktop shortcut and starting...
 set "PYW=%PY:python.exe=pythonw.exe%"
