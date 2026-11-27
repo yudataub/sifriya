@@ -177,18 +177,25 @@ async function home(){
     const MAX = f ? 300 : 3000;
     const fill = (ul, bs) => { ul.innerHTML = bs.slice(0, MAX).map(b => '<li><a href="?b=' + b[0] + '">' + esc(b[1]) + '</a></li>').join('')
       + (bs.length > MAX ? '<li style="list-style:none;color:var(--soft)">ועוד ' + (bs.length - MAX).toLocaleString() + ' ספרים. חפשו לפי שם בתיבה שלמעלה.</li>' : ''); };
-    // תחום שיש לספרים שלו עמודה חמישית (נושא, למשל בהיברובוקס): תתי-תיקיות בתוכו, לפי סדר הופעתן ברשימה (27.11.2026)
-    const subs = bs => { const m = new Map(); for (const b of bs) { const s = b[4] || ''; if (!m.has(s)) m.set(s, []); m.get(s).push(b); } return m; };
-    const box = (label, n, inner, cls) => '<details' + (cls ? ' class="' + cls + '" style="margin-inline-start:18px"' : '') + '><summary>' + esc(label) + ' <span>(' + n.toLocaleString() + ')</span></summary>' + inner + '</details>';
-    $('cats').innerHTML = [...cats].map(([c, bs]) => bs.some(b => b[4])
-      ? box(c, bs.length, [...subs(bs)].map(([s, sb]) => box(s || 'שונות', sb.length, '<ul></ul>', 'sub')).join(''))
-      : box(c, bs.length, '<ul></ul>')).join('') || '<div class="edge">לא נמצא ספר בשם הזה</div>';
-    [...$('cats').children].forEach((d, i) => { if (d.tagName !== 'DETAILS') return; const bs = [...cats.values()][i];      // הרשימה מתמלאת רק כשפותחים את התחום
-      const parts = bs.some(b => b[4]) ? [...subs(bs).values()] : null;
-      if (parts) d.querySelectorAll('details.sub').forEach((sd, j) => {
-        sd.ontoggle = () => { if (sd.open && !sd.dataset.full) { sd.dataset.full = 1; fill(sd.querySelector('ul'), parts[j]); } }; if (f) sd.open = true; });
-      else d.ontoggle = () => { if (d.open && !d.dataset.full) { d.dataset.full = 1; fill(d.querySelector('ul'), bs); } };
-      if (f) d.open = true; });
+    // תתי-תיקיות (27.11.2026): העמודה החמישית היא "רמה 1 › רמה 2". עץ לכל תחום, בסדר ההופעה ברשימה; רמה שיש בה רק תיקייה אחת (ובלי ספרים) מדולגת.
+    // התוכן של כל תיקייה נבנה רק כשפותחים אותה.
+    const node = () => ({kids: new Map(), books: [], n: 0});
+    const tree = bs => { const root = node(); for (const b of bs) { let t = root; t.n++;
+      for (const p of (b[4] || '').split(' › ').filter(Boolean)) { if (!t.kids.has(p)) t.kids.set(p, node()); t = t.kids.get(p); t.n++; } t.books.push(b); } return root; };
+    const reg = [];
+    const inner = t => { while (t.kids.size === 1 && !t.books.length) t = [...t.kids.values()][0];
+      let h = '', books = t.books.slice();
+      for (const [k, v] of t.kids) {
+        if (v.n === 1) { let o = v; while (!o.books.length) o = [...o.kids.values()][0]; books.push(o.books[0]); continue; }   // תיקייה עם ספר אחד: הספר עצמו, בלי עוד לחיצה
+        reg.push(v); h += '<details class="sub" data-i="' + (reg.length - 1) + '" style="margin-inline-start:18px"><summary>' + esc(k) + ' <span>(' + v.n.toLocaleString() + ')</span></summary></details>'; }
+      if (books.length) { reg.push({books}); h += '<ul data-i="' + (reg.length - 1) + '"></ul>'; } return h; };
+    const wire = (d, t) => { d.ontoggle = () => { if (!d.open || d.dataset.full) return; d.dataset.full = 1;
+      d.insertAdjacentHTML('beforeend', inner(t));
+      d.querySelectorAll(':scope > details.sub').forEach(sd => wire(sd, reg[sd.dataset.i]));
+      const ul = d.querySelector(':scope > ul'); if (ul) fill(ul, reg[ul.dataset.i].books); };
+      if (f) d.open = true; };
+    $('cats').innerHTML = [...cats].map(([c, bs]) => '<details><summary>' + esc(c) + ' <span>(' + bs.length.toLocaleString() + ')</span></summary></details>').join('') || '<div class="edge">לא נמצא ספר בשם הזה</div>';
+    [...$('cats').children].forEach((d, i) => { if (d.tagName === 'DETAILS') wire(d, tree([...cats.values()][i])); });
   }
   $('bf').oninput = draw; draw();
 }
