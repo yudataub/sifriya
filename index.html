@@ -99,7 +99,9 @@ const store = { get(k, d){ try { return localStorage.getItem(k) ?? d } catch(e){
 const Q = new URLSearchParams(location.search);
 const BK = (Q.get('b') || '').match(/^(\d+)\.([0-9a-f]{8})$/);
 const words = (Q.get('q') || '').split(/\s+/).filter(w => w.length > 1).slice(0, 12);
-const markRe = words.length ? new RegExp('(' + words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g') : null;
+const NQ = '[֑-ׇ]*';      // ניקוד וטעמים בין האותיות (התנ"ך והמשנה מוצגים מנוקדים, 27.11.2026)
+const wre = w => [...w].map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + NQ).join('');
+const markRe = words.length ? new RegExp('(' + words.map(wre).join('|') + ')', 'g') : null;
 const STEP = 40;
 function toast(t){ const e = $('toast'); e.textContent = t; e.style.opacity = 1; setTimeout(() => e.style.opacity = 0, 1800); }
 
@@ -242,7 +244,7 @@ function part(ref, n){      // קובץ קטעים של ספר: m = אתר המ�
   return PARTS.get(u);
 }
 function snippet(text, words){
-  let at = -1; for (const w of words) { const i = text.indexOf(w); if (i >= 0) { at = i; break; } }
+  let at = -1; for (const w of words) { const i = text.search(new RegExp(wre(w))); if (i >= 0) { at = i; break; } }
   const s = Math.max(0, at - 140); return (s ? '…' : '') + text.slice(s, s + 420) + (s + 420 < text.length ? '…' : '');
 }
 async function xsearch(q, cat){
