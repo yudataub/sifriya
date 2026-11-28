@@ -203,7 +203,7 @@ async function home(){
 // ----- חיפוש בתוך כל המאגרים (רק בספרייה הנעולה): השאלה עוברת ל-Worker ומשם למחשב שבו הספרייה (mekorot\lsearch.py)
 const API = 'https://kvatzim.kvatzim.workers.dev/l/';
 const LCATS = [['', 'כל המאגרים'], ['ספריא', 'ספרי הקודש (ספריא)'], ['אוצריא', 'אוצריא'], ['הספריה_התורנית', 'הספריה התורנית'], ['היברובוקס', 'היברובוקס'],
-  ['אסיף', 'אסיף'], ['אוצר_התורה', 'אוצר התורה'], ['שיעורי_הרב', 'שיעורי הרב'], ['הרב_רימון', 'ספרי הרב רימון']];
+  ['אסיף', 'אסיף'], ['אוצר_התורה', 'אוצר התורה'], ['שיעורי_הרב', 'שיעורי הרב'], ['הרב_רימון', 'ספרי הרב רימון'], ['יתד_נאמן', 'יתד נאמן (מאמרים)']];
 function searchBox(){
   $('home').querySelector('.lead').insertAdjacentHTML('afterend', '<form id="sf" style="margin:16px 0 6px;display:flex;gap:8px;flex-wrap:wrap">'
     + '<input id="sq" placeholder="חיפוש בתוך הספרים: שאלה, נושא או ציטוט" style="flex:1;min-width:220px;font:17px \'Segoe UI\',Arial,sans-serif;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)">'
@@ -217,7 +217,7 @@ function searchBox(){
     out.innerHTML = '<div class="edge">מחפש לפי משמעות ולפי מילים…</div>';
     let r;
     try { r = await xsearch(q, $('sc').value); } catch (err) { console.error(err); r = {error: 'failed'}; }
-    if (r.error) { out.innerHTML = '<div class="edge">' + ({offline: 'החיפוש לא זמין כרגע. אפשר עדיין לחפש ספר לפי שם, למטה.', busy: 'יותר מדי חיפושים בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה לחיפוש. רעננו את הדף והקישו שוב את הקוד.'}[r.error] || 'החיפוש נכשל. נסו שוב.') + '</div>'; return; }
+    if (r.error) { out.innerHTML = '<div class="edge">' + ({offline: 'החיפוש לא זמין כרגע. אפשר עדיין לחפש ספר לפי שם, למטה.', busy: 'יותר מדי חיפושים בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה לחיפוש. רעננו את הדף והקישו שוב את הקוד.', daily_limit: 'הגענו למכסת החיפושים היומית. נסו שוב מחר.'}[r.error] || 'החיפוש נכשל. נסו שוב.') + '</div>'; return; }
     if (!r.results.length) { out.innerHTML = '<div class="edge">לא נמצא דבר. נסו ניסוח אחר.</div>'; return; }
     out.innerHTML = r.results.map(x => '<div style="border-top:1px solid var(--line);padding:10px 0">'
       + (x.url ? '<a style="font-weight:700;color:var(--accent)" href="' + esc(x.url) + '"' + (x.url.includes('/mekorot/') ? ' target="_blank" rel="noopener"' : '') + '>' + esc(x.source) + '</a>' : '<b>' + esc(x.source) + '</b>')
@@ -264,8 +264,8 @@ function snippet(text, words){
   const s = Math.max(0, at - 140); return (s ? '…' : '') + text.slice(s, s + 420) + (s + 420 < text.length ? '…' : '');
 }
 async function xsearch(q, cat){
-  const [m, ev] = await Promise.all([xmeta(), fetch(API + 'embed', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({q})}).then(r => r.json())]);
-  if (!ev.v) return {error: 'offline'};
+  const [m, ev] = await Promise.all([xmeta(), fetch(API + 'embed', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Tok': TOK}, body: JSON.stringify({q})}).then(r => r.json())]);
+  if (!ev.v) return {error: ['forbidden', 'busy', 'daily_limit'].includes(ev.error) ? ev.error : 'offline'};
   const D = m.d, Mq = m.m, KS = m.ks, v = ev.v, qp = new Float32Array(D);
   for (let i = 0; i < 1024; i++) { const vi = v[i]; if (!vi) continue; for (let j = 0; j < D; j++) qp[j] += vi * m.P[i * D + j]; }
   const cs = new Float32Array(m.nlist);
