@@ -208,22 +208,78 @@ function searchBox(){
   $('home').querySelector('.lead').insertAdjacentHTML('afterend', '<form id="sf" style="margin:16px 0 6px;display:flex;gap:8px;flex-wrap:wrap">'
     + '<input id="sq" placeholder="חיפוש בתוך הספרים: שאלה, נושא או ציטוט" style="flex:1;min-width:220px;font:17px \'Segoe UI\',Arial,sans-serif;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)">'
     + '<select id="sc" style="font:15px \'Segoe UI\',Arial,sans-serif;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)">'
-    + LCATS.map(c => '<option value="' + c[0] + '">' + c[1] + '</option>').join('') + '</select><button class="btn" style="font-size:16px">חיפוש</button></form>'
-    + '<div id="sr" style="font:15.5px/1.65 \'Segoe UI\',Arial,sans-serif"></div>');
+    + LCATS.map(c => '<option value="' + c[0] + '">' + c[1] + '</option>').join('') + '</select>'
+    + '<select id="sm" title="תשובה מנוסחת מתוך הקטעים" style="font:15px \'Segoe UI\',Arial,sans-serif;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)">'
+    + '<option value="deep">תשובה מעמיקה</option><option value="fast">תשובה מהירה</option><option value="off">רק קטעים</option></select>'
+    + '<button class="btn" style="font-size:16px">חיפוש</button></form>'
+    + '<div id="sa" style="font:16px/1.75 \'Segoe UI\',Arial,sans-serif"></div><div id="sr" style="font:15.5px/1.65 \'Segoe UI\',Arial,sans-serif"></div>');
+  $('sm').value = store.get('amode', 'deep'); $('sm').onchange = () => store.set('amode', $('sm').value);
   $('sf').onsubmit = async e => {
     e.preventDefault();
     const q = $('sq').value.trim(), out = $('sr');
     if (q.length < 2) return;
+    $('sa').innerHTML = '';
     out.innerHTML = '<div class="edge">מחפש לפי משמעות ולפי מילים…</div>';
     let r;
     try { r = await xsearch(q, $('sc').value); } catch (err) { console.error(err); r = {error: 'failed'}; }
     if (r.error) { out.innerHTML = '<div class="edge">' + ({offline: 'החיפוש לא זמין כרגע. אפשר עדיין לחפש ספר לפי שם, למטה.', busy: 'יותר מדי חיפושים בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה לחיפוש. רעננו את הדף והקישו שוב את הקוד.', daily_limit: 'הגענו למכסת החיפושים היומית. נסו שוב מחר.'}[r.error] || 'החיפוש נכשל. נסו שוב.') + '</div>'; return; }
     if (!r.results.length) { out.innerHTML = '<div class="edge">לא נמצא דבר. נסו ניסוח אחר.</div>'; return; }
-    out.innerHTML = r.results.map(x => '<div style="border-top:1px solid var(--line);padding:10px 0">'
+    const mode = $('sm').value;
+    if (mode !== 'off') answer(q, r.results, mode).catch(err => { console.error(err); $('sa').innerHTML = '<div class="edge">התשובה המנוסחת נכשלה. הקטעים שנמצאו – למטה.</div>'; });
+    out.innerHTML = (mode !== 'off' ? '<h3 style="margin:18px 0 4px">הקטעים שנמצאו</h3>' : '') + r.results.slice(0, 12).map((x, i) => '<div id="sr' + i + ' style="border-top:1px solid var(--line);padding:10px 0">'
       + (x.url ? '<a style="font-weight:700;color:var(--accent)" href="' + esc(x.url) + '"' + (x.url.includes('/mekorot/') ? ' target="_blank" rel="noopener"' : '') + '>' + esc(x.source) + '</a>' : '<b>' + esc(x.source) + '</b>')
       + '<div style="color:var(--soft);font-size:13.5px">' + esc(x.cat) + (x.head ? ' · ' + esc(x.head) : '') + ' · ' + esc(x.by) + '</div>'
       + '<div>' + esc(x.excerpt) + '</div></div>').join('');
   };
+}
+
+// ----- התשובה המנוסחת (Worker /l/answer, 28.11.2026): הקטעים נשלחים כ-search_result, Claude עונה רק מתוכם עם ציטוטים מובנים,
+// וכל ציטוט נהפך כאן למספר עם קישור לקטע. מעמיק = Sonnet (ברירת המחדל), מהיר = Haiku.
+function md(t){             // markdown קטן: כותרות, הדגשה, רשימות, פסקאות. הקלט כבר מוגן (esc)
+  return t.split(/\n{2,}/).map(b => {
+    const lines = b.split('\n');
+    if (lines.every(l => /^\s*[-*] /.test(l))) return '<ul>' + lines.map(l => '<li>' + l.replace(/^\s*[-*] /, '') + '</li>').join('') + '</ul>';
+    return lines.map(l => /^#{1,4} /.test(l) ? '<h3 style="margin:14px 0 4px;color:var(--accent)">' + l.replace(/^#+ /, '') + '</h3>'
+      : /^\s*[-*] /.test(l) ? '<div style="margin-inline-start:14px">• ' + l.replace(/^\s*[-*] /, '') + '</div>' : /^---+$/.test(l) ? '<hr>' : l + '<br>').join('');
+  }).join('<p style="margin:6px 0"></p>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+async function answer(q, res, mode){
+  const box = $('sa');
+  box.innerHTML = '<div class="edge">' + (mode === 'fast' ? 'כותב תשובה מהירה…' : 'כותב תשובה מעמיקה מתוך הקטעים…') + '</div>';
+  const passages = res.map(x => ({title: x.source + (x.head ? ' · ' + x.head : '') + ' (' + x.cat + ')', text: x.text}));
+  const r = await fetch(API + 'answer', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Tok': TOK}, body: JSON.stringify({q, mode, passages})});
+  if (!r.ok) { const e = await r.json().catch(() => ({}));
+    box.innerHTML = '<div class="edge">' + ({daily_limit: 'הגענו למכסת התשובות היומית. הקטעים שנמצאו – למטה.', busy: 'יותר מדי שאלות בדקה האחרונה. נסו שוב בעוד רגע.', forbidden: 'אין הרשאה. רעננו את הדף והקישו שוב את הקוד.'}[e.error] || 'התשובה המנוסחת לא זמינה כרגע. הקטעים – למטה.') + '</div>'; return; }
+  const segs = [], num = new Map(); let cur = null, pend = false, err = '';
+  const draw = () => { pend = false;
+    let t = '';
+    for (const g of segs) { t += esc(g.t); if (g.c.size) t += [...g.c].map(i => '\u0001' + i + '\u0002').join(''); }
+    t = md(t).replace(/\u0001(\d+)\u0002/g, (_, i) => { const x = res[+i]; if (!num.has(+i)) num.set(+i, num.size + 1);
+      return '<sup><a href="' + esc(x.url) + '" title="' + esc(x.source) + '" style="text-decoration:none"' + (x.url.includes('/mekorot/') ? ' target="_blank" rel="noopener"' : '') + '>[' + num.get(+i) + ']</a></sup>'; });
+    const src = [...num].sort((a, b) => a[1] - b[1]).map(([i, n]) => { const x = res[i];
+      return '<div>[' + n + '] <a href="' + esc(x.url) + '"' + (x.url.includes('/mekorot/') ? ' target="_blank" rel="noopener"' : '') + '>' + esc(x.source) + '</a>' + (x.head ? ' · ' + esc(x.head) : '') + ' <span style="color:var(--soft)">(' + esc(x.cat) + ')</span></div>'; }).join('');
+    box.innerHTML = '<div style="border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin:14px 0;background:var(--paper)">' + (t || '<div class="edge">חושב…</div>')
+      + (src ? '<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px;font-size:14px"><b>מקורות</b>' + src + '</div>' : '')
+      + (err ? '<div class="edge">' + err + '</div>' : '')
+      + '<div style="color:var(--soft);font-size:12.5px;margin-top:8px">התשובה נכתבה בידי בינה מלאכותית מתוך הקטעים שנמצאו; כדאי לעיין במקורות עצמם.</div></div>'; };
+  const kick = () => { if (!pend) { pend = true; requestAnimationFrame(draw); } };
+  const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+  for (;;) {
+    const {done, value} = await rd.read(); if (done) break;
+    buf += dec.decode(value, {stream: true});
+    let k; while ((k = buf.indexOf('\n\n')) >= 0) {
+      const line = buf.slice(0, k); buf = buf.slice(k + 2);
+      if (!line.startsWith('data: ')) continue;
+      const ev = JSON.parse(line.slice(6));
+      if (ev.type === 'content_block_start' && ev.content_block.type === 'text') { cur = {t: ev.content_block.text || '', c: new Set()}; segs.push(cur); }
+      else if (ev.type === 'content_block_delta' && cur && ev.delta.type === 'text_delta') cur.t += ev.delta.text;
+      else if (ev.type === 'content_block_delta' && cur && ev.delta.type === 'citations_delta') { const i = +String(ev.delta.citation.source || '').slice(1); if (res[i]) cur.c.add(i); }
+      else if (ev.type === 'content_block_stop') cur = null;
+      else if (ev.type === 'kt_error') err = ev.error === 'busy' ? 'השירות עמוס כרגע. נסו שוב בעוד רגע.' : 'הכתיבה נקטעה.';
+      kick();
+    }
+  }
+  draw();
 }
 
 // ----- החיפוש עצמו, בדפדפן (mekorot\sindex.py): IVF-PQ על אינדקס מוצפן שיושב ב-GitHub. רק השאלה עוברת ל-Worker, כדי להפוך לווקטור
@@ -293,13 +349,13 @@ async function xsearch(q, cat){
     const top = [...ps.keys()].sort((a, b) => ps[b] - ps[a]).slice(0, 40);
     for (const i of top) { const b = p.book(i); per[b] = (per[b] || 0) + 1; if (per[b] > 2) continue; pick.push([ps[i], b, p.pos(i)]); seen.add(b + ':' + p.pos(i)); if (pick.length >= 4) break; }
   }
-  for (const h of best) { if (seen.has(h[1] + ':' + h[2])) continue; per[h[1]] = (per[h[1]] || 0) + 1; if (per[h[1]] > 2) continue; pick.push(h); if (pick.length >= 10) break; }
+  for (const h of best) { if (seen.has(h[1] + ':' + h[2])) continue; per[h[1]] = (per[h[1]] || 0) + 1; if (per[h[1]] > 2) continue; pick.push(h); if (pick.length >= 24) break; }
   const qs = encodeURIComponent(words.join(' '));
   const results = await Promise.all(pick.map(async ([s, b, pos]) => {
     const [ref, title, c] = m.books[b], rows = await part(ref, Math.floor(pos / 150)).catch(() => null), row = rows && rows[pos % 150];
     const text = row ? row[2].map(p => p[0]).join(' ') : '';
     const url = ref[0] === 'm' ? 'https://yudataub.github.io/mekorot/?b=' + ref.slice(1) + '&p=' + pos + '&q=' + qs : '?b=' + ref.slice(1) + '&p=' + pos + '&q=' + qs;
-    return {source: title, head: row ? row[0] : '', cat: c, by: 'משמעות', excerpt: snippet(text, words), url};
+    return {source: title, head: row ? row[0] : '', cat: c, by: 'משמעות', excerpt: snippet(text, words), url, text: text.slice(0, 3000)};
   }));
   return {query: q, results};
 }
